@@ -1,16 +1,16 @@
-import os
+from supabase import create_client
 import time
 import random
 import logging
 from datetime import datetime
-from supabase import create_client
 
-# Read from environment (set in Render dashboard)
+# Read from environment variables (set in Render dashboard)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
+# Validate they exist
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    raise RuntimeError("Supabase credentials not set in environment")
+    raise ValueError("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY environment variables")
 
 _supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
