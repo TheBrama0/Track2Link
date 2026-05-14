@@ -10,7 +10,8 @@ from processor_web import process_csv
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-# Optional: serve frontend HTML when visiting http://127.0.0.1:8000
+# Optional: serve frontend HTML when running locally (for testing)
+# On Render, this path will likely not exist, so it's ignored.
 FRONTEND_PATH = os.path.join(os.path.dirname(__file__), "..", "frontend", "index.html")
 if os.path.exists(FRONTEND_PATH):
     @app.get("/")
@@ -20,7 +21,12 @@ if os.path.exists(FRONTEND_PATH):
 else:
     @app.get("/")
     async def root():
-        return {"message": "Frontend not found. Use /docs for API."}
+        return {"message": "Backend API is running. Use /docs for interactive documentation."}
+
+# Health check endpoint for Render (and keep-alive pings)
+@app.get("/status/keepalive")
+async def keepalive():
+    return {"status": "alive"}
 
 @app.post("/process")
 async def start_processing(
