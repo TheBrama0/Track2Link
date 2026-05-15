@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
-    <title>Track2Link · YouTube linker for Spotify playlists</title>
+    <title>Track2Link · YouTube linker for Spotify playlists (strict merged CSV)</title>
     <style>
         * {
             margin: 0;
@@ -52,6 +52,28 @@
             font-size: 0.85rem;
         }
 
+        .info-note {
+            background: #eef2ff;
+            padding: 0.75rem 1rem;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            margin-bottom: 1.2rem;
+            color: #1e40af;
+            border-left: 4px solid #3b82f6;
+            line-height: 1.4;
+        }
+        .info-note strong {
+            font-weight: 700;
+        }
+        .info-note .small-mono {
+            font-family: monospace;
+            font-size: 0.75rem;
+            background: #dbeafe;
+            display: inline-block;
+            padding: 0.1rem 0.3rem;
+            border-radius: 12px;
+        }
+
         .form-group {
             margin-bottom: 1rem;
         }
@@ -94,7 +116,7 @@
         }
         .row-2col > div {
             flex: 1;
-            min-width: 120px;
+            min-width: 130px;
         }
 
         .action-bar {
@@ -129,6 +151,7 @@
             background: #b9c2d0;
             cursor: not-allowed;
             transform: none;
+            opacity: 0.7;
         }
 
         .download-btn {
@@ -200,13 +223,32 @@
             font-size: 0.8rem;
             margin-top: 0.8rem;
             border-left: 4px solid #ef4444;
+            word-break: break-word;
+        }
+        .success-message {
+            background: #e0f2fe;
+            color: #0369a1;
+            border-left-color: #0ea5e9;
         }
 
         footer {
             text-align: center;
             font-size: 0.7rem;
-            color: #7e8b9f;
+            color: #4b5563;
             margin-top: 1.5rem;
+            border-top: 1px solid #e2e8f0;
+            padding-top: 1rem;
+        }
+        .footer-line {
+            margin: 0.3rem 0;
+        }
+        .footer-line a {
+            color: #2563eb;
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .footer-line a:hover {
+            text-decoration: underline;
         }
 
         @media (max-width: 600px) {
@@ -228,12 +270,24 @@
             }
         }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
 </head>
 <body>
 <div class="container">
     <div class="card">
         <h2>🎧 Track2Link</h2>
         <div class="subhead">Attach YouTube links to your Spotify export – private, session‑based, no account.</div>
+        
+        <div class="info-note">
+            ⚡ <strong>Before you start</strong><br>
+            Provide Merged CSV only from the <strong><a href="https://thebrama0.github.io/Exportify-CSV-Compiler-Tool/">Exportify CSV Compiler Tool</a></strong><br>
+            Download the same playlist from both Exportify services:<br>
+            🌐 <strong><a href="https://exportify.net/">exportify.net</a></strong><br>
+            🌐 <strong><a href="https://exportify.app/">exportify.app</a></strong> (don't forget to enable Include artists data ,Include audio features data,Include album data in settings)<br>
+            📋 download and upload the merged file here.<br>
+                      
+        </div>
+           
 
         <div class="form-group">
             <label>🔑 YouTube Data API key <span class="optional">(from Google Cloud Console)</span></label>
@@ -241,15 +295,12 @@
         </div>
 
         <div class="form-group">
-            <label>📁 Spotify CSV (Exportify format)</label>
+            <label>📁 Merged Spotify CSV (Exportify compiler output)</label>
             <input type="file" id="csvfile" accept=".csv">
+            <div style="font-size:0.7rem; color:#5b6e8c; margin-top: 0.3rem;">✔️ Must contain <strong>all 33 columns</strong> from the compiler tool (including audio features).</div>
         </div>
 
         <div class="row-2col">
-            <div class="form-group">
-                <label>⏱️ Delay (seconds)</label>
-                <input type="number" id="delay" value="1.0" step="0.2" min="0.5" max="8">
-            </div>
             <div class="form-group">
                 <label>⚙️ Mode</label>
                 <select id="limit_type">
@@ -264,7 +315,7 @@
         </div>
 
         <div class="action-bar">
-            <button id="startBtn" onclick="startProcessing()">🚀 Start linking</button>
+            <button id="startBtn" onclick="startProcessing()" disabled>🚀 Start linking</button>
             <button id="downloadBtn" class="download-btn" disabled onclick="downloadFile()">⬇️ Download CSV</button>
             <div id="statusMsg" class="status-text">Ready</div>
         </div>
@@ -280,25 +331,51 @@
                 <div class="progress-text" id="progressPercent">0%</div>
             </div>
         </div>
-        <div class="log-box" id="logBox">✨ Ready. Upload a CSV and press start.</div>
+        <div class="log-box" id="logBox">✨ Ready. Upload a <strong>merged CSV</strong> (compiled with audio features) and press start.</div>
     </div>
-    <footer>YouTube API key stays on your device → server never stores it. Processed CSV contains matched YouTube links.</footer>
+    
+    <footer>
+        <div class="footer-line">🔐 YouTube API key stays on your device → server never stores it. Processed CSV contains matched YouTube links.</div>
+        <div class="footer-line">📦 Transparency: This tool backs up anonymous playlist data to the Internet Archive. No user info is ever included. <a href="#" id="learnWhyLink">Learn why</a></div>
+    </footer>
 </div>
 
 <script>
-    const SERVER = "https://track2link.onrender.com";   // change to your deployed backend URL later
+    const SERVER = "https://track2link.onrender.com";
     let currentPollInterval = null;
     let currentTaskId = null;
-
-    function setError(msg) {
+    let mergedFileValid = false;
+    let currentValidFile = null;
+    
+    // --- EXACT required columns (case-sensitive after trim, but we'll compare lowercased trimmed)
+    const REQUIRED_COLUMNS = [
+        "Track URI", "Track Name", "Artist URI(s)", "Artist Name(s)", "Album URI", "Album Name",
+        "Album Artist URI(s)", "Album Artist Name(s)", "Album Release Date", "Album Image URL",
+        "Disc Number", "Track Number", "Track Duration (ms)", "Track Preview URL", "Explicit",
+        "Popularity", "ISRC", "Added By", "Added At", "Release Date", "Genres", "Record Label",
+        "Danceability", "Energy", "Key", "Loudness", "Mode", "Speechiness", "Acousticness",
+        "Instrumentalness", "Liveness", "Valence", "Tempo", "Time Signature"
+    ];
+    
+    // Normalize column headers: trim, remove BOM, lowercased for comparison (but we keep original for error display)
+    function normalizeHeader(header) {
+        if (!header) return "";
+        return header.trim().replace(/^\uFEFF/, '').toLowerCase();
+    }
+    
+    function setError(msg, isSuccess = false) {
         const errorDiv = document.getElementById('errorBox');
-        errorDiv.innerHTML = `<div class="error-message">⚠️ ${msg}</div>`;
+        if (isSuccess) {
+            errorDiv.innerHTML = `<div class="error-message success-message">✅ ${msg}</div>`;
+        } else {
+            errorDiv.innerHTML = `<div class="error-message">⚠️ ${msg}</div>`;
+        }
         setTimeout(() => {
             if (errorDiv.firstChild) errorDiv.firstChild.style.opacity = '0';
             setTimeout(() => { errorDiv.innerHTML = ''; }, 500);
-        }, 5000);
+        }, 6000);
     }
-
+    
     function enableDownloadButton(enabled, url = null) {
         const downloadBtn = document.getElementById('downloadBtn');
         if (enabled && url) {
@@ -311,43 +388,119 @@
             downloadBtn.style.opacity = '0.6';
         }
     }
-
+    
     function downloadFile() {
         const downloadBtn = document.getElementById('downloadBtn');
         const url = downloadBtn.getAttribute('data-url');
-        if (url) {
-            window.location.href = url;
+        if (url) window.location.href = url;
+    }
+    
+    // Validate that CSV includes all required columns (case-insensitive, trimmed)
+    function validateMergedCSV(file) {
+        return new Promise((resolve, reject) => {
+            if (!file || (!file.type.includes('csv') && !file.name.endsWith('.csv'))) {
+                reject(new Error("Invalid file type. Please upload a CSV file."));
+                return;
+            }
+            Papa.parse(file, {
+                preview: 1,
+                header: false,
+                skipEmptyLines: true,
+                complete: (results) => {
+                    if (!results.data || results.data.length === 0) {
+                        reject(new Error("CSV appears empty or malformed."));
+                        return;
+                    }
+                    const rawHeaders = results.data[0];
+                    if (!rawHeaders || rawHeaders.length < 20) {
+                        reject(new Error("CSV has too few columns. Not a valid merged Exportify CSV."));
+                        return;
+                    }
+                    // Normalize headers
+                    const normalizedHeaders = rawHeaders.map(h => normalizeHeader(h));
+                    const missing = [];
+                    for (let required of REQUIRED_COLUMNS) {
+                        const normalizedReq = required.toLowerCase();
+                        if (!normalizedHeaders.includes(normalizedReq)) {
+                            missing.push(required);
+                        }
+                    }
+                    if (missing.length > 0) {
+                        const missingStr = missing.join(", ");
+                        reject(new Error(`Missing required columns: ${missingStr}. Please use the Exportify CSV Compiler Tool with full features (audio + album data).`));
+                        return;
+                    }
+                    resolve(true);
+                },
+                error: (err) => reject(new Error(`Parsing error: ${err.message}`))
+            });
+        });
+    }
+    
+    function updateStartButtonState() {
+        const startBtn = document.getElementById('startBtn');
+        const apiKey = document.getElementById('apikey').value.trim();
+        const isValid = (apiKey.length > 0 && mergedFileValid === true && currentValidFile !== null);
+        startBtn.disabled = !isValid;
+        if (!isValid) {
+            if (!apiKey) startBtn.title = "Enter YouTube API key";
+            else if (!mergedFileValid) startBtn.title = "Upload a valid merged CSV (all 33 columns required)";
+            else startBtn.title = "Please select a CSV file";
+        } else {
+            startBtn.title = "Ready to start linking";
         }
     }
-
+    
+    function handleFileValidation(file) {
+        if (!file) {
+            mergedFileValid = false;
+            currentValidFile = null;
+            updateStartButtonState();
+            document.getElementById('logBox').innerHTML = "✨ Ready. Upload a merged CSV file.";
+            return;
+        }
+        const errorDiv = document.getElementById('errorBox');
+        errorDiv.innerHTML = `<div class="error-message" style="background:#e6f0ff; color:#1e3a8a;">⏳ Validating full column set (33 columns)...</div>`;
+        
+        validateMergedCSV(file).then(() => {
+            mergedFileValid = true;
+            currentValidFile = file;
+            setError("Merged CSV accepted — all 33 required columns present.", true);
+            document.getElementById('logBox').innerHTML = `✅ Valid merged CSV loaded. ${REQUIRED_COLUMNS.length} columns found. Ready to process.`;
+            updateStartButtonState();
+        }).catch((err) => {
+            mergedFileValid = false;
+            currentValidFile = null;
+            setError(err.message);
+            document.getElementById('logBox').innerHTML = `❌ Invalid CSV: ${err.message.substring(0, 200)}`;
+            updateStartButtonState();
+        });
+    }
+    
+    // fixed internal delay (no UI)
+    const FIXED_DELAY_SECONDS = 0.8;
+    
     async function startProcessing() {
         const startBtn = document.getElementById('startBtn');
         if (startBtn.disabled) return;
         
         const apikey = document.getElementById('apikey').value.trim();
-        const fileInput = document.getElementById('csvfile');
-        const delay = parseFloat(document.getElementById('delay').value);
+        const file = currentValidFile;
         const limitType = document.getElementById('limit_type').value;
         let limitValue = parseInt(document.getElementById('limit_value').value);
         if (isNaN(limitValue)) limitValue = 0;
-
+        
         if (!apikey) {
             setError("YouTube API key is required.");
             return;
         }
-        if (!fileInput.files || fileInput.files.length === 0) {
-            setError("Please select a CSV file.");
+        if (!file || !mergedFileValid) {
+            setError("Please upload a valid merged CSV with all 33 columns.");
             return;
         }
-        const file = fileInput.files[0];
-        if (!file.name.endsWith('.csv')) {
-            setError("File must be a .csv");
-            return;
-        }
-
-        // reset UI
+        
         const logBox = document.getElementById('logBox');
-        logBox.innerHTML = "⏳ Starting task, uploading file...";
+        logBox.innerHTML = "⏳ Starting task, uploading file... (delay fixed 0.8s between requests)";
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressPercent').innerText = '0%';
         document.getElementById('statusMsg').innerHTML = '⚙️ processing ...';
@@ -357,18 +510,18 @@
         const formData = new FormData();
         formData.append('file', file);
         formData.append('api_key', apikey);
-        formData.append('delay', delay);
+        formData.append('delay', FIXED_DELAY_SECONDS);
         formData.append('limit_type', limitType);
         formData.append('limit_value', limitValue);
-
+        
         startBtn.disabled = true;
         startBtn.innerText = '⏳ Starting ...';
-
+        
         try {
             const response = await fetch(`${SERVER}/process`, { method: 'POST', body: formData });
             if (!response.ok) {
                 const errorText = await response.text();
-                throw new Error(`Server error ${response.status}: ${errorText.slice(0, 100)}`);
+                throw new Error(`Server error ${response.status}: ${errorText.slice(0, 150)}`);
             }
             const data = await response.json();
             currentTaskId = data.task_id;
@@ -383,12 +536,12 @@
             startBtn.innerText = '🚀 Start linking';
             document.getElementById('statusMsg').innerHTML = 'Ready';
             logBox.innerHTML = `❌ Error: ${err.message}`;
+            updateStartButtonState();
         }
     }
-
+    
     function startPolling(taskId) {
         if (currentPollInterval) clearInterval(currentPollInterval);
-        
         const poll = async () => {
             try {
                 const res = await fetch(`${SERVER}/status/${taskId}`);
@@ -397,13 +550,11 @@
                     throw new Error(`Status error ${res.status}`);
                 }
                 const data = await res.json();
-                // update logs
                 const logBox = document.getElementById('logBox');
                 if (data.logs && data.logs.length) {
                     logBox.innerHTML = data.logs.map(l => `📌 ${l}`).join('\n');
                     logBox.scrollTop = logBox.scrollHeight;
                 }
-                // update progress
                 const prog = typeof data.progress === 'number' ? data.progress : 0;
                 document.getElementById('progressFill').style.width = `${prog}%`;
                 document.getElementById('progressPercent').innerText = `${prog}%`;
@@ -413,9 +564,9 @@
                     document.getElementById('startBtn').disabled = false;
                     document.getElementById('startBtn').innerText = '✅ Start new';
                     document.getElementById('statusMsg').innerHTML = '✅ Done!';
-                    // enable download button
                     const downloadUrl = `${SERVER}/result/${taskId}`;
                     enableDownloadButton(true, downloadUrl);
+                    updateStartButtonState();
                 } else if (data.status === 'error') {
                     clearInterval(currentPollInterval);
                     document.getElementById('startBtn').disabled = false;
@@ -423,8 +574,8 @@
                     setError("Task failed: " + (data.logs?.slice(-1)[0] || "unknown error"));
                     document.getElementById('statusMsg').innerHTML = '❌ Failed';
                     enableDownloadButton(false);
+                    updateStartButtonState();
                 } else {
-                    // still running
                     document.getElementById('startBtn').innerText = '🏃 Processing ...';
                 }
             } catch (err) {
@@ -432,29 +583,36 @@
                 if (!currentPollInterval) return;
                 const logBox = document.getElementById('logBox');
                 logBox.innerHTML = `⚠️ Connection issue: ${err.message}\nRetrying...`;
-                setTimeout(() => {}, 1000);
             }
         };
-        
         poll();
         currentPollInterval = setInterval(poll, 2000);
     }
-
-    // validate inputs to enable start button style
-    const validateInputs = () => {
-        const key = document.getElementById('apikey').value.trim();
-        const file = document.getElementById('csvfile').files.length;
-        const startBtn = document.getElementById('startBtn');
-        if (startBtn.disabled) return;
-        if (!key || !file) {
-            startBtn.style.opacity = '0.7';
-        } else {
-            startBtn.style.opacity = '1';
+    
+    // event listeners
+    document.getElementById('apikey').addEventListener('input', () => updateStartButtonState());
+    const fileInput = document.getElementById('csvfile');
+    fileInput.addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (!file) {
+            mergedFileValid = false;
+            currentValidFile = null;
+            updateStartButtonState();
+            document.getElementById('logBox').innerHTML = "✨ Ready. Upload a merged CSV and press start.";
+            return;
         }
-    };
-    document.getElementById('apikey').addEventListener('input', validateInputs);
-    document.getElementById('csvfile').addEventListener('change', validateInputs);
-    validateInputs();
+        handleFileValidation(file);
+    });
+    
+    const learnWhyLink = document.getElementById('learnWhyLink');
+    if (learnWhyLink) {
+        learnWhyLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            alert("📚 Transparency: This tool sends anonymized playlist metadata (track/artist names, audio features, no user IDs, no API keys) to the Internet Archive for preservation and research. Your privacy is respected – nothing personally identifiable is ever stored. Learn more: open source archival initiative.");
+        });
+    }
+    
+    updateStartButtonState();
 </script>
 </body>
 </html>
