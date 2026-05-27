@@ -194,8 +194,8 @@ def process_csv(file_path, settings, username, task_id):
                 link, api_dur, api_title = search_youtube(song, artist, album, settings['api_key'], target_duration_sec=target_sec)
             except Exception as e:
                 error_msg = str(e).lower()
-                # Check if quota is exhausted
-                if "quotaexceeded" in error_msg or "quota exceeded" in error_msg:
+                # Check for any kind of quota exhaustion (daily or per-minute)
+                if any(phrase in error_msg for phrase in ["quota exceeded", "quotaexceeded", "429", "per-minute"]):
                     add_log(task_id, f"🚨 QUOTA EXHAUSTED – stopping early: {e}")
                     quota_exhausted = True
                     break   # exit the for loop immediately
