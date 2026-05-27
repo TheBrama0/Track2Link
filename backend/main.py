@@ -31,7 +31,7 @@ async def keepalive():
 async def start_processing(
     file: UploadFile = File(...),
     api_key: str = Form(...),
-    delay: float = Form(1.0),
+    delay: float = Form(2.0),
     limit_type: str = Form("full"),
     limit_value: int = Form(0),
 ):
