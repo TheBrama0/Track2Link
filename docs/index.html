@@ -80,7 +80,9 @@
 
         label {
             font-weight: 500;
-            display: block;
+            display: flex;
+            align-items: center;
+            gap: 6px;
             margin-bottom: 0.3rem;
             color: #0f172a;
             font-size: 0.85rem;
@@ -90,6 +92,24 @@
             font-weight: normal;
             color: #6c7a91;
             font-size: 0.75rem;
+        }
+
+        .info-icon {
+            cursor: pointer;
+            font-size: 0.85rem;
+            background: #e2e8f0;
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            color: #475569;
+            transition: 0.2s;
+        }
+        .info-icon:hover {
+            background: #cbd5e1;
+            color: #0f172a;
         }
 
         input, select {
@@ -152,6 +172,13 @@
             cursor: not-allowed;
             transform: none;
             opacity: 0.7;
+        }
+
+        .pause-btn {
+            background: #dc2626;
+        }
+        .pause-btn:hover:not(:disabled) {
+            background: #b91c1c;
         }
 
         .download-btn {
@@ -231,6 +258,16 @@
             border-left-color: #0ea5e9;
         }
 
+        .quota-note {
+            background: #fff7ed;
+            border-left: 4px solid #f97316;
+            padding: 0.6rem 1rem;
+            font-size: 0.75rem;
+            color: #9a3412;
+            border-radius: 16px;
+            margin: 0.5rem 0 0.2rem;
+        }
+
         footer {
             text-align: center;
             font-size: 0.7rem;
@@ -287,11 +324,14 @@
             📋 download and upload the merged file here.<br>
                       
         </div>
-           
 
         <div class="form-group">
             <label>🔑 YouTube Data API key <span class="optional">(from Google Cloud Console)</span></label>
             <input type="text" id="apikey" placeholder="AIzaSy... your API key" autocomplete="off">
+            <div class="quota-note">
+                ⚠️ <strong>Free quota limit:</strong> A fresh YouTube Data API v3 key allows only <strong>99 searches per day</strong>. 
+                Use "Limit by rows" (default) to stay under quota. For unlimited requests you need a paid/billed Google Cloud project.
+            </div>
         </div>
 
         <div class="form-group">
@@ -302,20 +342,23 @@
 
         <div class="row-2col">
             <div class="form-group">
-                <label>⚙️ Mode</label>
+                <label>⚙️ Mode 
+                    <span class="info-icon" id="modeInfoIcon" style="cursor:pointer;" title="Click for details">ℹ️</span>
+                </label>
                 <select id="limit_type">
                     <option value="full">Full CSV (all tracks)</option>
-                    <option value="rows">Limit by rows</option>
+                    <option value="rows" selected>Limit by rows</option>
                 </select>
             </div>
-            <div class="form-group">
-                <label>🔢 Limit value</label>
-                <input type="number" id="limit_value" value="100" min="1">
+            <div class="form-group" id="limitValueGroup">
+                <label>🔢 Limit value (number of new links)</label>
+                <input type="number" id="limit_value" value="99" min="1">
             </div>
         </div>
 
         <div class="action-bar">
             <button id="startBtn" onclick="startProcessing()" disabled>🚀 Start linking</button>
+            <button id="pauseBtn" class="pause-btn" onclick="pauseProcessing()" disabled>⏸️ Stop</button>
             <button id="downloadBtn" class="download-btn" disabled onclick="downloadFile()">⬇️ Download CSV</button>
             <div id="statusMsg" class="status-text">Ready</div>
         </div>
@@ -346,6 +389,7 @@
     let currentTaskId = null;
     let mergedFileValid = false;
     let currentValidFile = null;
+    let isProcessing = false;  // prevent multiple simultaneous starts
     
     // --- EXACT required columns (case-sensitive after trim, but we'll compare lowercased trimmed)
     const REQUIRED_COLUMNS = [
@@ -441,13 +485,27 @@
         const startBtn = document.getElementById('startBtn');
         const apiKey = document.getElementById('apikey').value.trim();
         const isValid = (apiKey.length > 0 && mergedFileValid === true && currentValidFile !== null);
-        startBtn.disabled = !isValid;
+        // Also disable if already processing
+        startBtn.disabled = !isValid || isProcessing;
         if (!isValid) {
             if (!apiKey) startBtn.title = "Enter YouTube API key";
             else if (!mergedFileValid) startBtn.title = "Upload a valid merged CSV (all 33 columns required)";
             else startBtn.title = "Please select a CSV file";
+        } else if (isProcessing) {
+            startBtn.title = "Processing in progress...";
         } else {
             startBtn.title = "Ready to start linking";
+        }
+    }
+    
+    // Toggle limit value visibility based on mode selection
+    function toggleLimitValueVisibility() {
+        const modeSelect = document.getElementById('limit_type');
+        const limitGroup = document.getElementById('limitValueGroup');
+        if (modeSelect.value === 'full') {
+            limitGroup.style.display = 'none';
+        } else {
+            limitGroup.style.display = 'block';
         }
     }
     
@@ -477,10 +535,14 @@
         });
     }
     
-    // fixed internal delay (no UI)
-    const FIXED_DELAY_SECONDS = 0.8;
+    // Increased delay to respect free quota rate limits
+    const FIXED_DELAY_SECONDS = 2;
     
     async function startProcessing() {
+        if (isProcessing) {
+            setError("Already processing. Please wait or stop the current task.");
+            return;
+        }
         const startBtn = document.getElementById('startBtn');
         if (startBtn.disabled) return;
         
@@ -499,13 +561,18 @@
             return;
         }
         
-        const logBox = document.getElementById('logBox');
-        logBox.innerHTML = "⏳ Starting task, uploading file... ";
+        // Clean up any previous polling
+        if (currentPollInterval) {
+            clearInterval(currentPollInterval);
+            currentPollInterval = null;
+        }
+        // Reset UI
+        document.getElementById('logBox').innerHTML = "⏳ Starting task, uploading file... ";
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressPercent').innerText = '0%';
         document.getElementById('statusMsg').innerHTML = '⚙️ processing ...';
         enableDownloadButton(false);
-        if (currentPollInterval) clearInterval(currentPollInterval);
+        document.getElementById('pauseBtn').disabled = false;
         
         const formData = new FormData();
         formData.append('file', file);
@@ -516,6 +583,7 @@
         
         startBtn.disabled = true;
         startBtn.innerText = '⏳ Starting ...';
+        isProcessing = true;
         
         try {
             const response = await fetch(`${SERVER}/process`, { method: 'POST', body: formData });
@@ -526,7 +594,8 @@
             const data = await response.json();
             currentTaskId = data.task_id;
             if (!currentTaskId) throw new Error("No task ID received.");
-            document.getElementById('statusMsg').innerHTML = `🆔 Task: ${currentTaskId.slice(0,6)}… running`;
+            // Do NOT show task ID in UI
+            document.getElementById('statusMsg').innerHTML = '⚙️ processing ...';
             startBtn.innerText = '🏃 Processing...';
             startPolling(currentTaskId);
         } catch (err) {
@@ -534,9 +603,35 @@
             setError(`Failed to start: ${err.message}`);
             startBtn.disabled = false;
             startBtn.innerText = '🚀 Start linking';
+            document.getElementById('pauseBtn').disabled = true;
             document.getElementById('statusMsg').innerHTML = 'Ready';
-            logBox.innerHTML = `❌ Error: ${err.message}`;
+            document.getElementById('logBox').innerHTML = `❌ Error: ${err.message}`;
+            isProcessing = false;
             updateStartButtonState();
+        }
+    }
+    
+    async function pauseProcessing() {
+        if (!currentTaskId) return;
+        try {
+            const response = await fetch(`${SERVER}/cancel/${currentTaskId}`, { method: 'POST' });
+            if (response.ok) {
+                setError("⏸️ Stop requested – processing will stop after current track. You can restart later by uploading the same CSV.", true);
+                document.getElementById('pauseBtn').disabled = true;
+            } else {
+                setError("Could not stop task.");
+            }
+        } catch (err) {
+            setError(`Stop failed: ${err.message}`);
+        }
+    }
+    
+    // Helper: update logs while respecting user's scroll position
+    function updateLogBox(logBox, newContent) {
+        const wasScrolledToBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 30;
+        logBox.innerHTML = newContent;
+        if (wasScrolledToBottom) {
+            logBox.scrollTop = logBox.scrollHeight;
         }
     }
     
@@ -552,8 +647,24 @@
                 const data = await res.json();
                 const logBox = document.getElementById('logBox');
                 if (data.logs && data.logs.length) {
-                    logBox.innerHTML = data.logs.map(l => `📌 ${l}`).join('\n');
-                    logBox.scrollTop = logBox.scrollHeight;
+                    let processedLogs = data.logs.map(line => {
+                        let newLine = line;
+                        newLine = newLine.replace(
+                            /No new tracks to back up \(all already in database\)/gi,
+                            "No new tracks to back up (finding links)"
+                        );
+                        newLine = newLine.replace(
+                            /null value in column "entry_no" of relation "links" violates not-null constraint.*$/gim,
+                            "Database error: missing required 'entry_no' field. Please check backend schema."
+                        );
+                        newLine = newLine.replace(
+                            /No new track data is found to back up \(searching for link online\/caches\)\./gi,
+                            "no new track data is found"
+                        );
+                        return newLine;
+                    });
+                    const logHtml = processedLogs.map(l => `📌 ${l}`).join('\n');
+                    updateLogBox(logBox, logHtml);
                 }
                 const prog = typeof data.progress === 'number' ? data.progress : 0;
                 document.getElementById('progressFill').style.width = `${prog}%`;
@@ -561,19 +672,41 @@
                 
                 if (data.status === 'done') {
                     clearInterval(currentPollInterval);
+                    currentPollInterval = null;
                     document.getElementById('startBtn').disabled = false;
                     document.getElementById('startBtn').innerText = '✅ Start new';
+                    document.getElementById('pauseBtn').disabled = true;
                     document.getElementById('statusMsg').innerHTML = '✅ Done!';
                     const downloadUrl = `${SERVER}/result/${taskId}`;
                     enableDownloadButton(true, downloadUrl);
+                    isProcessing = false;
+                    currentTaskId = null;
                     updateStartButtonState();
                 } else if (data.status === 'error') {
                     clearInterval(currentPollInterval);
+                    currentPollInterval = null;
                     document.getElementById('startBtn').disabled = false;
                     document.getElementById('startBtn').innerText = '🚀 Start linking';
+                    document.getElementById('pauseBtn').disabled = true;
                     setError("Task failed: " + (data.logs?.slice(-1)[0] || "unknown error"));
                     document.getElementById('statusMsg').innerHTML = '❌ Failed';
                     enableDownloadButton(false);
+                    isProcessing = false;
+                    currentTaskId = null;
+                    updateStartButtonState();
+                } else if (data.status === 'cancelled') {
+                    clearInterval(currentPollInterval);
+                    currentPollInterval = null;
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('startBtn').innerText = '🚀 Restart';
+                    document.getElementById('pauseBtn').disabled = true;
+                    document.getElementById('statusMsg').innerHTML = '⏸️ Stopped';
+                    setError("Processing stopped. You can upload the same CSV again to continue.", true);
+                    // Allow download of partial results
+                    const downloadUrl = `${SERVER}/result/${taskId}`;
+                    enableDownloadButton(true, downloadUrl);
+                    isProcessing = false;
+                    currentTaskId = null;
                     updateStartButtonState();
                 } else {
                     document.getElementById('startBtn').innerText = '🏃 Processing ...';
@@ -582,7 +715,7 @@
                 console.warn("poll error", err);
                 if (!currentPollInterval) return;
                 const logBox = document.getElementById('logBox');
-                logBox.innerHTML = `⚠️ Connection issue: ${err.message}\nRetrying...`;
+                updateLogBox(logBox, `⚠️ Connection issue: ${err.message}\nRetrying...`);
             }
         };
         poll();
@@ -603,6 +736,19 @@
         }
         handleFileValidation(file);
     });
+    
+    // Mode selection toggle for limit value visibility
+    const modeSelect = document.getElementById('limit_type');
+    modeSelect.addEventListener('change', toggleLimitValueVisibility);
+    toggleLimitValueVisibility(); // initial call
+    
+    // Info icon click handler
+    const modeInfoIcon = document.getElementById('modeInfoIcon');
+    if (modeInfoIcon) {
+        modeInfoIcon.addEventListener('click', () => {
+            alert("⚙️ Mode options:\n\n• Full CSV: processes every track in the uploaded file (may exceed free YouTube quota).\n\n• Limit by rows: processes only the first N tracks (default 99, adjustable). This is safe for free API keys (99 searches/day).");
+        });
+    }
     
     const learnWhyLink = document.getElementById('learnWhyLink');
     if (learnWhyLink) {
