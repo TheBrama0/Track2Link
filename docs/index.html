@@ -384,16 +384,16 @@
 </div>
 
 <script>
-    // --- FIX: Use relative URLs (empty string = same origin as the page) ---
+    // ========== CONFIGURATION ==========
     const SERVER = "https://track2link.onrender.com";
-    const API_SECRET = "f4k3s3cr3t-9x8c7v6b5n4m3"; 
+    const API_SECRET = "f4k3s3cr3t-9x8c7v6b5n4m3";   // must match backend's API_SECRET
+
     let currentPollInterval = null;
     let currentTaskId = null;
     let mergedFileValid = false;
     let currentValidFile = null;
-    let isProcessing = false;  // prevent multiple simultaneous starts
+    let isProcessing = false;
     
-    // --- EXACT required columns (case-insensitive after trim)
     const REQUIRED_COLUMNS = [
         "Track URI", "Track Name", "Artist URI(s)", "Artist Name(s)", "Album URI", "Album Name",
         "Album Artist URI(s)", "Album Artist Name(s)", "Album Release Date", "Album Image URL",
@@ -403,19 +403,43 @@
         "Instrumentalness", "Liveness", "Valence", "Tempo", "Time Signature"
     ];
     
-    // Helper: fetch with automatic retries (3 attempts, exponential backoff)
-    async function fetchWithRetry(url, options, retries = 3) {
+    // Helper: fetch with automatic retries AND include the API key header
+    async function fetchWithRetry(url, options = {}, retries = 3) {
+        // Merge the API key header into the request
+        const headers = {
+            ...(options.headers || {}),
+            'X-API-Key': API_SECRET
+        };
+        const newOptions = { ...options, headers };
+        
         for (let i = 0; i < retries; i++) {
             try {
-                const response = await fetch(url, options);
+                const response = await fetch(url, newOptions);
                 if (response.ok) return response;
-                // If HTTP error (4xx/5xx) but not a network error, throw to allow retry
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             } catch (err) {
                 if (i === retries - 1) throw err;
-                const delay = Math.pow(2, i) * 500; // 0.5s, 1s, 2s
+                const delay = Math.pow(2, i) * 500;
                 await new Promise(r => setTimeout(r, delay));
             }
+        }
+    }
+    
+    // Helper to download a file using fetch + Blob (so we can include the API key header)
+    async function downloadFileWithAuth(url, filename) {
+        try {
+            const response = await fetchWithRetry(url);
+            const blob = await response.blob();
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            window.URL.revokeObjectURL(blobUrl);
+        } catch (err) {
+            setError(`Download failed: ${err.message}`);
         }
     }
     
@@ -451,9 +475,11 @@
     }
     
     function downloadFile() {
-        const downloadBtn = document.getElementById('downloadBtn');
-        const url = downloadBtn.getAttribute('data-url');
-        if (url) window.location.href = url;
+        const url = document.getElementById('downloadBtn').getAttribute('data-url');
+        if (url) {
+            // Use authenticated download (fetch + blob)
+            downloadFileWithAuth(url, "processed.csv");
+        }
     }
     
     function validateMergedCSV(file) {
@@ -596,7 +622,6 @@
         isProcessing = true;
         
         try {
-            // Use retry‑failedconst SERVEaware fetch
             const response = await fetchWithRetry(`${SERVER}/process`, { method: 'POST', body: formData });
             const data = await response.json();
             currentTaskId = data.task_id;
