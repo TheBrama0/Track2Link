@@ -59,6 +59,35 @@ async def require_api_key(request: Request, call_next):
     return await call_next(request)
 
 # ------------------------------------------------------------
+# Admin endpoint: reset local cache and re‑seed from Supabase
+# ------------------------------------------------------------
+@app.post("/admin/reset-cache")
+async def reset_cache(request: Request):
+    # Verify API key
+    api_key = request.headers.get("X-API-Key")
+    if not API_SECRET or api_key != API_SECRET:
+        return JSONResponse(status_code=403, content={"error": "Forbidden"})
+
+    try:
+        # Delete the local cache files if they exist
+        if os.path.exists("tracks_cache.db"):
+            os.remove("tracks_cache.db")
+            logger.info("Deleted tracks_cache.db")
+        if os.path.exists("links_cache.db"):
+            os.remove("links_cache.db")
+            logger.info("Deleted links_cache.db")
+
+        # Re‑initialise tables and re‑seed from Supabase
+        init_dbs()
+        seed_tracks_from_supabase(_supabase)
+        seed_links_from_supabase(_supabase)
+
+        return {"status": "Cache reset and re‑seeded successfully from Supabase"}
+    except Exception as e:
+        logger.error(f"Reset cache failed: {e}")
+        return JSONResponse(status_code=500, content={"error": str(e)})
+
+# ------------------------------------------------------------
 # One‑time seeding
 # ------------------------------------------------------------
 def initialize_local_cache():
