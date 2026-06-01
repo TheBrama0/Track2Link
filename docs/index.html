@@ -329,7 +329,7 @@
             <label>🔑 YouTube Data API key <span class="optional">(from Google Cloud Console)</span></label>
             <input type="text" id="apikey" placeholder="AIzaSy... your API key" autocomplete="off">
             <div class="quota-note">
-                ⚠️ <strong>Free quota limit:</strong> A fresh YouTube Data API v3 key allows only <strong>99 searches per day</strong>. 
+                ⚠️ <strong>Free quota limit:</strong> A fresh YouTube Data API v3 key allows only <strong>90 searches per day</strong>. 
                 Use "Limit by rows" (default) to stay under quota. For unlimited requests you need a paid/billed Google Cloud project.
             </div>
         </div>
@@ -352,7 +352,7 @@
             </div>
             <div class="form-group" id="limitValueGroup">
                 <label>🔢 Limit value (number of new links)</label>
-                <input type="number" id="limit_value" value="99" min="1">
+                <input type="number" id="limit_value" value="90" min="1">
             </div>
         </div>
 
@@ -384,14 +384,16 @@
 </div>
 
 <script>
+    // --- FIX: Use relative URLs (empty string = same origin as the page) ---
     const SERVER = "https://track2link.onrender.com";
+    const API_SECRET = "f4k3s3cr3t-9x8c7v6b5n4m3"; 
     let currentPollInterval = null;
     let currentTaskId = null;
     let mergedFileValid = false;
     let currentValidFile = null;
     let isProcessing = false;  // prevent multiple simultaneous starts
     
-    // --- EXACT required columns (case-sensitive after trim, but we'll compare lowercased trimmed)
+    // --- EXACT required columns (case-insensitive after trim)
     const REQUIRED_COLUMNS = [
         "Track URI", "Track Name", "Artist URI(s)", "Artist Name(s)", "Album URI", "Album Name",
         "Album Artist URI(s)", "Album Artist Name(s)", "Album Release Date", "Album Image URL",
@@ -401,7 +403,22 @@
         "Instrumentalness", "Liveness", "Valence", "Tempo", "Time Signature"
     ];
     
-    // Normalize column headers: trim, remove BOM, lowercased for comparison (but we keep original for error display)
+    // Helper: fetch with automatic retries (3 attempts, exponential backoff)
+    async function fetchWithRetry(url, options, retries = 3) {
+        for (let i = 0; i < retries; i++) {
+            try {
+                const response = await fetch(url, options);
+                if (response.ok) return response;
+                // If HTTP error (4xx/5xx) but not a network error, throw to allow retry
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+            } catch (err) {
+                if (i === retries - 1) throw err;
+                const delay = Math.pow(2, i) * 500; // 0.5s, 1s, 2s
+                await new Promise(r => setTimeout(r, delay));
+            }
+        }
+    }
+    
     function normalizeHeader(header) {
         if (!header) return "";
         return header.trim().replace(/^\uFEFF/, '').toLowerCase();
@@ -439,7 +456,6 @@
         if (url) window.location.href = url;
     }
     
-    // Validate that CSV includes all required columns (case-insensitive, trimmed)
     function validateMergedCSV(file) {
         return new Promise((resolve, reject) => {
             if (!file || (!file.type.includes('csv') && !file.name.endsWith('.csv'))) {
@@ -460,7 +476,6 @@
                         reject(new Error("CSV has too few columns. Not a valid merged Exportify CSV."));
                         return;
                     }
-                    // Normalize headers
                     const normalizedHeaders = rawHeaders.map(h => normalizeHeader(h));
                     const missing = [];
                     for (let required of REQUIRED_COLUMNS) {
@@ -485,7 +500,6 @@
         const startBtn = document.getElementById('startBtn');
         const apiKey = document.getElementById('apikey').value.trim();
         const isValid = (apiKey.length > 0 && mergedFileValid === true && currentValidFile !== null);
-        // Also disable if already processing
         startBtn.disabled = !isValid || isProcessing;
         if (!isValid) {
             if (!apiKey) startBtn.title = "Enter YouTube API key";
@@ -498,7 +512,6 @@
         }
     }
     
-    // Toggle limit value visibility based on mode selection
     function toggleLimitValueVisibility() {
         const modeSelect = document.getElementById('limit_type');
         const limitGroup = document.getElementById('limitValueGroup');
@@ -535,8 +548,7 @@
         });
     }
     
-    // Increased delay to respect free quota rate limits
-    const FIXED_DELAY_SECONDS = 3;
+    const FIXED_DELAY_SECONDS = 2;
     
     async function startProcessing() {
         if (isProcessing) {
@@ -561,12 +573,10 @@
             return;
         }
         
-        // Clean up any previous polling
         if (currentPollInterval) {
             clearInterval(currentPollInterval);
             currentPollInterval = null;
         }
-        // Reset UI
         document.getElementById('logBox').innerHTML = "⏳ Starting task, uploading file... ";
         document.getElementById('progressFill').style.width = '0%';
         document.getElementById('progressPercent').innerText = '0%';
@@ -586,15 +596,11 @@
         isProcessing = true;
         
         try {
-            const response = await fetch(`${SERVER}/process`, { method: 'POST', body: formData });
-            if (!response.ok) {
-                const errorText = await response.text();
-                throw new Error(`Server error ${response.status}: ${errorText.slice(0, 150)}`);
-            }
+            // Use retry‑failedconst SERVEaware fetch
+            const response = await fetchWithRetry(`${SERVER}/process`, { method: 'POST', body: formData });
             const data = await response.json();
             currentTaskId = data.task_id;
             if (!currentTaskId) throw new Error("No task ID received.");
-            // Do NOT show task ID in UI
             document.getElementById('statusMsg').innerHTML = '⚙️ processing ...';
             startBtn.innerText = '🏃 Processing...';
             startPolling(currentTaskId);
@@ -614,7 +620,7 @@
     async function pauseProcessing() {
         if (!currentTaskId) return;
         try {
-            const response = await fetch(`${SERVER}/cancel/${currentTaskId}`, { method: 'POST' });
+            const response = await fetchWithRetry(`${SERVER}/cancel/${currentTaskId}`, { method: 'POST' });
             if (response.ok) {
                 setError("⏸️ Stop requested – processing will stop after current track. You can restart later by uploading the same CSV.", true);
                 document.getElementById('pauseBtn').disabled = true;
@@ -626,7 +632,6 @@
         }
     }
     
-    // Helper: update logs while respecting user's scroll position
     function updateLogBox(logBox, newContent) {
         const wasScrolledToBottom = logBox.scrollHeight - logBox.scrollTop - logBox.clientHeight < 30;
         logBox.innerHTML = newContent;
@@ -639,28 +644,15 @@
         if (currentPollInterval) clearInterval(currentPollInterval);
         const poll = async () => {
             try {
-                const res = await fetch(`${SERVER}/status/${taskId}`);
-                if (!res.ok) {
-                    if (res.status === 404) throw new Error("Task not found (maybe expired)");
-                    throw new Error(`Status error ${res.status}`);
-                }
+                const res = await fetchWithRetry(`${SERVER}/status/${taskId}`);
                 const data = await res.json();
                 const logBox = document.getElementById('logBox');
                 if (data.logs && data.logs.length) {
                     let processedLogs = data.logs.map(line => {
                         let newLine = line;
-                        newLine = newLine.replace(
-                            /No new tracks to back up \(all already in database\)/gi,
-                            "No new tracks to back up (finding links)"
-                        );
-                        newLine = newLine.replace(
-                            /null value in column "entry_no" of relation "links" violates not-null constraint.*$/gim,
-                            "Database error: missing required 'entry_no' field. Please check backend schema."
-                        );
-                        newLine = newLine.replace(
-                            /No new track data is found to back up \(searching for link online\/caches\)\./gi,
-                            "no new track data is found"
-                        );
+                        newLine = newLine.replace(/No new tracks to back up \(all already in database\)/gi, "No new tracks to back up (finding links)");
+                        newLine = newLine.replace(/null value in column "entry_no" of relation "links" violates not-null constraint.*$/gim, "Database error: missing required 'entry_no' field. Please check backend schema.");
+                        newLine = newLine.replace(/No new track data is found to back up \(searching for link online\/caches\)\./gi, "no new track data is found");
                         return newLine;
                     });
                     const logHtml = processedLogs.map(l => `📌 ${l}`).join('\n');
@@ -702,7 +694,6 @@
                     document.getElementById('pauseBtn').disabled = true;
                     document.getElementById('statusMsg').innerHTML = '⏸️ Stopped';
                     setError("Processing stopped. You can upload the same CSV again to continue.", true);
-                    // Allow download of partial results
                     const downloadUrl = `${SERVER}/result/${taskId}`;
                     enableDownloadButton(true, downloadUrl);
                     isProcessing = false;
@@ -722,7 +713,7 @@
         currentPollInterval = setInterval(poll, 2000);
     }
     
-    // event listeners
+    // Event listeners
     document.getElementById('apikey').addEventListener('input', () => updateStartButtonState());
     const fileInput = document.getElementById('csvfile');
     fileInput.addEventListener('change', (e) => {
@@ -737,16 +728,14 @@
         handleFileValidation(file);
     });
     
-    // Mode selection toggle for limit value visibility
     const modeSelect = document.getElementById('limit_type');
     modeSelect.addEventListener('change', toggleLimitValueVisibility);
-    toggleLimitValueVisibility(); // initial call
+    toggleLimitValueVisibility();
     
-    // Info icon click handler
     const modeInfoIcon = document.getElementById('modeInfoIcon');
     if (modeInfoIcon) {
         modeInfoIcon.addEventListener('click', () => {
-            alert("⚙️ Mode options:\n\n• Full CSV: processes every track in the uploaded file (may exceed free YouTube quota).\n\n• Limit by rows: processes only the first N tracks (default 99, adjustable). This is safe for free API keys (99 searches/day).");
+            alert("⚙️ Mode options:\n\n• Full CSV: processes every track in the uploaded file (may exceed free YouTube quota).\n\n• Limit by rows: processes only the first N tracks (default 90, adjustable). This is safe for free API keys (90 searches/day).");
         });
     }
     
