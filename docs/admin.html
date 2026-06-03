@@ -20,14 +20,8 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
         h1 { font-size: 1.5rem; margin-bottom: 1rem; }
-        .form-group {
-            margin-bottom: 1.2rem;
-        }
-        label {
-            display: block;
-            font-weight: 500;
-            margin-bottom: 0.3rem;
-        }
+        .form-group { margin-bottom: 1.2rem; }
+        label { display: block; font-weight: 500; margin-bottom: 0.3rem; }
         input, textarea {
             width: 100%;
             padding: 0.5rem;
@@ -45,9 +39,7 @@
             cursor: pointer;
             margin-right: 0.5rem;
         }
-        button.danger {
-            background: #dc2626;
-        }
+        button.danger { background: #dc2626; }
         .result {
             background: #f1f5f9;
             padding: 1rem;
@@ -58,12 +50,26 @@
             margin-top: 1rem;
         }
         hr { margin: 1.5rem 0; }
+        .token-input {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+        .token-input input { flex: 1; }
     </style>
 </head>
 <body>
 <div class="container" id="app">
-    <h1>🔧 Admin Panel (hidden)</h1>
-    <div id="accessMessage"></div>
+    <h1>🔧 Admin Panel</h1>
+    <div id="authSection">
+        <div class="form-group">
+            <label>🔑 Admin Token (from Render environment variable)</label>
+            <div class="token-input">
+                <input type="password" id="adminTokenInput" placeholder="Enter the admin token">
+                <button onclick="authenticate()">Authenticate</button>
+            </div>
+        </div>
+    </div>
     <div id="adminUI" style="display: none;">
         <div class="form-group">
             <label>📌 Clear a single URI from local cache</label>
@@ -88,72 +94,83 @@
 </div>
 
 <script>
-    // ========== CONFIGURATION – CHANGE THESE ==========
     const BACKEND = "https://track2link.onrender.com";
-    const API_SECRET = "YOUR_API_SECRET";   // same as Render's API_SECRET
-    const ADMIN_TOKEN = "YOUR_SECRET_TOKEN";           // replace with a long random string
-    
-    // ========== URL token check ==========
-    const urlParams = new URLSearchParams(window.location.search);
-    const token = urlParams.get('token');
-    
-    if (token !== ADMIN_TOKEN) {
-        document.getElementById('accessMessage').innerHTML = `
-            <div style="background:#fee2e2; padding:1rem; border-radius:16px; color:#991b1b;">
-                ⛔ Access Denied – invalid or missing token.
-            </div>
-        `;
-    } else {
-        document.getElementById('accessMessage').innerHTML = `✅ Authenticated – admin interface active.`;
+    let adminToken = sessionStorage.getItem('adminToken');
+
+    if (adminToken) {
+        document.getElementById('authSection').style.display = 'none';
         document.getElementById('adminUI').style.display = 'block';
     }
-    
-    // ========== Helper: fetch with API key header ==========
-    async function adminFetch(endpoint, method = 'POST', body = null) {
+
+    async function authenticate() {
+        const token = document.getElementById('adminTokenInput').value.trim();
+        if (!token) return alert("Enter the admin token");
+        // Test the token by calling a harmless admin endpoint (e.g., refresh-uri with dummy)
+        try {
+            const res = await fetch(`${BACKEND}/admin/refresh-uri`, {
+                method: 'POST',
+                headers: {
+                    'X-Admin-Token': token,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ spotify_uri: "test" })
+            });
+            if (res.status === 403) throw new Error("Invalid token");
+            // Success – store token and show UI
+            sessionStorage.setItem('adminToken', token);
+            adminToken = token;
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('adminUI').style.display = 'block';
+        } catch (err) {
+            alert("Authentication failed: " + err.message);
+        }
+    }
+
+    async function adminFetch(endpoint, body = null) {
         const options = {
-            method,
-            headers: { 'X-API-Key': API_SECRET, 'Content-Type': 'application/json' }
+            method: 'POST',
+            headers: {
+                'X-Admin-Token': adminToken,
+                'Content-Type': 'application/json'
+            }
         };
         if (body) options.body = JSON.stringify(body);
         const res = await fetch(`${BACKEND}${endpoint}`, options);
         return await res.json();
     }
-    
-    // ========== Clear single URI ==========
+
     async function clearUri() {
         const uri = document.getElementById('clearUri').value.trim();
         if (!uri) return alert("Enter a Spotify URI");
         const resultDiv = document.getElementById('clearResult');
         resultDiv.textContent = "⏳ Clearing...";
         try {
-            const data = await adminFetch('/admin/clear-uri', 'POST', { spotify_uri: uri });
+            const data = await adminFetch('/admin/clear-uri', { spotify_uri: uri });
             resultDiv.textContent = JSON.stringify(data, null, 2);
         } catch (err) {
             resultDiv.textContent = `Error: ${err.message}`;
         }
     }
-    
-    // ========== Refresh single URI from Supabase ==========
+
     async function refreshUri() {
         const uri = document.getElementById('refreshUri').value.trim();
         if (!uri) return alert("Enter a Spotify URI");
         const resultDiv = document.getElementById('refreshResult');
         resultDiv.textContent = "⏳ Refreshing...";
         try {
-            const data = await adminFetch('/admin/refresh-uri', 'POST', { spotify_uri: uri });
+            const data = await adminFetch('/admin/refresh-uri', { spotify_uri: uri });
             resultDiv.textContent = JSON.stringify(data, null, 2);
         } catch (err) {
             resultDiv.textContent = `Error: ${err.message}`;
         }
     }
-    
-    // ========== Reset whole cache ==========
+
     async function resetCache() {
         if (!confirm("⚠️ WARNING: This will delete the entire local cache and re‑seed from Supabase.\nAll pending unsynced rows will be lost.\nAre you absolutely sure?")) return;
         const resultDiv = document.getElementById('resetResult');
         resultDiv.textContent = "⏳ Resetting cache...";
         try {
-            const data = await adminFetch('/admin/reset-cache', 'POST');
+            const data = await adminFetch('/admin/reset-cache');
             resultDiv.textContent = JSON.stringify(data, null, 2);
         } catch (err) {
             resultDiv.textContent = `Error: ${err.message}`;
