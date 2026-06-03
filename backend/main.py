@@ -26,31 +26,31 @@ if not ALLOWED_ORIGINS or ALLOWED_ORIGINS == [""]:
     ALLOWED_ORIGINS = ["*"]
     logger.warning("ALLOWED_ORIGINS not set – allowing all origins.")
 
-# Admin API secret (only for /admin/* endpoints)
-API_SECRET = os.environ.get("API_SECRET", None)
-if not API_SECRET:
-    logger.error("API_SECRET environment variable not set – admin endpoints will be unprotected!")
+# Admin token (only for /admin/* endpoints)
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", None)
+if not ADMIN_TOKEN:
+    logger.error("ADMIN_TOKEN environment variable not set – admin endpoints will be unprotected!")
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],   # include OPTIONS for preflight
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # ------------------------------------------------------------
-# Middleware: require API key ONLY for admin endpoints
+# Middleware: require admin token ONLY for admin endpoints
 # ------------------------------------------------------------
 @app.middleware("http")
-async def require_api_key(request: Request, call_next):
+async def require_admin_token(request: Request, call_next):
     # Allow preflight OPTIONS requests
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # Public paths (no API key required)
+    # Public paths (no token required)
     public_paths = [
         "/status/keepalive",
         "/process",
@@ -62,11 +62,11 @@ async def require_api_key(request: Request, call_next):
     if any(request.url.path.startswith(p) for p in public_paths):
         return await call_next(request)
 
-    # Admin paths require API key
+    # Admin paths require the admin token in X-Admin-Token header
     if request.url.path.startswith("/admin/"):
-        api_key = request.headers.get("X-API-Key")
-        if not API_SECRET or api_key != API_SECRET:
-            return JSONResponse(status_code=403, content={"error": "Forbidden – invalid or missing admin API key"})
+        admin_token = request.headers.get("X-Admin-Token")
+        if not ADMIN_TOKEN or admin_token != ADMIN_TOKEN:
+            return JSONResponse(status_code=403, content={"error": "Forbidden – invalid admin token"})
 
     return await call_next(request)
 
@@ -75,10 +75,7 @@ async def require_api_key(request: Request, call_next):
 # ------------------------------------------------------------
 @app.post("/admin/reset-cache")
 async def reset_cache(request: Request):
-    api_key = request.headers.get("X-API-Key")
-    if not API_SECRET or api_key != API_SECRET:
-        return JSONResponse(status_code=403, content={"error": "Forbidden"})
-
+    # Token already checked in middleware
     try:
         if os.path.exists("tracks_cache.db"):
             os.remove("tracks_cache.db")
@@ -101,10 +98,6 @@ async def reset_cache(request: Request):
 # ------------------------------------------------------------
 @app.post("/admin/clear-uri")
 async def clear_uri(request: Request):
-    api_key = request.headers.get("X-API-Key")
-    if not API_SECRET or api_key != API_SECRET:
-        return JSONResponse(status_code=403, content={"error": "Forbidden"})
-
     try:
         body = await request.json()
     except:
@@ -142,14 +135,10 @@ async def clear_uri(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ------------------------------------------------------------
-# NEW: Admin endpoint – refresh a single URI from Supabase (on‑demand seeding)
+# Admin endpoint: refresh a single URI from Supabase (on‑demand seeding)
 # ------------------------------------------------------------
 @app.post("/admin/refresh-uri")
 async def refresh_uri(request: Request):
-    api_key = request.headers.get("X-API-Key")
-    if not API_SECRET or api_key != API_SECRET:
-        return JSONResponse(status_code=403, content={"error": "Forbidden"})
-
     try:
         body = await request.json()
     except:
@@ -172,13 +161,11 @@ async def refresh_uri(request: Request):
         conn_tracks = sqlite3.connect("tracks_cache.db")
         cursor_tracks = conn_tracks.cursor()
         if track_data:
-            # Replace or insert, set synced = 1
             cursor_tracks.execute(
                 "INSERT OR REPLACE INTO tracks_cache (spotify_uri, full_row_json, synced) VALUES (?, ?, 1)",
                 (spotify_uri, json.dumps(track_data))
             )
         else:
-            # No track in Supabase – delete from local cache
             cursor_tracks.execute("DELETE FROM tracks_cache WHERE spotify_uri = ?", (spotify_uri,))
         conn_tracks.commit()
         conn_tracks.close()
