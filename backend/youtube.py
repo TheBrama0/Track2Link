@@ -68,7 +68,7 @@ def search_youtube(song, artist, album, api_key, target_duration_sec=None, max_r
                 type='video',
                 videoCategoryId='10',    # music only
                 order='viewCount',        # most viewed first
-                regionCode='US'
+                regionCode='IN'
             ).execute()
 
             items = search_response.get('items', [])
