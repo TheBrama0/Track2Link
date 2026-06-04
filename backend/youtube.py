@@ -67,7 +67,7 @@ def search_youtube(song, artist, album, api_key, target_duration_sec=None, max_r
                 maxResults=50,           # only one page, max 50 results
                 type='video',
                 videoCategoryId='10',    # music only
-                order='viewCount'        # most viewed first
+                order='viewCount',        # most viewed first
                 regionCode='US'
             ).execute()
 
