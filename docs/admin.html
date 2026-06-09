@@ -105,18 +105,13 @@
     async function authenticate() {
         const token = document.getElementById('adminTokenInput').value.trim();
         if (!token) return alert("Enter the admin token");
-        // Test the token by calling a harmless admin endpoint (e.g., refresh-uri with dummy)
         try {
-            const res = await fetch(`${BACKEND}/admin/refresh-uri`, {
+            // Use dedicated verify endpoint
+            const res = await fetch(`${BACKEND}/admin/verify`, {
                 method: 'POST',
-                headers: {
-                    'X-Admin-Token': token,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ spotify_uri: "test" })
+                headers: { 'X-Admin-Token': token }
             });
-            if (res.status === 403) throw new Error("Invalid token");
-            // Success – store token and show UI
+            if (!res.ok) throw new Error("Invalid token");
             sessionStorage.setItem('adminToken', token);
             adminToken = token;
             document.getElementById('authSection').style.display = 'none';
@@ -136,6 +131,7 @@
         };
         if (body) options.body = JSON.stringify(body);
         const res = await fetch(`${BACKEND}${endpoint}`, options);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return await res.json();
     }
 
@@ -146,7 +142,11 @@
         resultDiv.textContent = "⏳ Clearing...";
         try {
             const data = await adminFetch('/admin/clear-uri', { spotify_uri: uri });
-            resultDiv.textContent = JSON.stringify(data, null, 2);
+            let msg = JSON.stringify(data, null, 2);
+            if (data.deleted_from_tracks === 0 && data.deleted_from_links === 0 && !data.warnings?.length) {
+                msg += "\n\n⚠️ No rows were deleted. Verify the URI exactly matches the stored value (case‑sensitive).";
+            }
+            resultDiv.textContent = msg;
         } catch (err) {
             resultDiv.textContent = `Error: ${err.message}`;
         }
