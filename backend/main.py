@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi import FastAPI, UploadFile, File, Form, Request, Header, HTTPException, Depends
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -26,43 +26,47 @@ if not ALLOWED_ORIGINS or ALLOWED_ORIGINS == [""]:
     ALLOWED_ORIGINS = ["*"]
     logger.warning("ALLOWED_ORIGINS not set – allowing all origins.")
 
-# Admin token (only for /admin/* endpoints)
+# Admin token
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", None)
 if not ADMIN_TOKEN:
-    logger.error("ADMIN_TOKEN environment variable not set – admin endpoints will be unprotected!")
+    logger.critical("ADMIN_TOKEN environment variable not set – admin endpoints will be DISABLED.")
+    # You can either raise an error or disable admin routes
+    # raise RuntimeError("ADMIN_TOKEN required")
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST", "OPTIONS"],   # include OPTIONS for preflight
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 app.add_middleware(GZipMiddleware, minimum_size=500)
 
 # ------------------------------------------------------------
-# Middleware: require admin token ONLY for admin endpoints
+# Admin token dependency (second layer of defense)
+# ------------------------------------------------------------
+def require_admin_token(x_admin_token: str = Header(...)):
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid admin token")
+
+# ------------------------------------------------------------
+# Middleware (first layer)
 # ------------------------------------------------------------
 @app.middleware("http")
-async def require_admin_token(request: Request, call_next):
-    # Allow preflight OPTIONS requests
+async def check_admin_token(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    # Public paths (no token required)
-    public_paths = [
-        "/status/keepalive",
-        "/process",
-        "/status/",
-        "/result/",
-        "/cancel/",
-        "/"
-    ]
-    if any(request.url.path.startswith(p) for p in public_paths):
+    # Public paths
+    if request.url.path == "/":
+        return await call_next(request)
+    if request.url.path.startswith("/status/") or request.url.path.startswith("/result/") or request.url.path.startswith("/cancel/"):
+        return await call_next(request)
+    if request.url.path in ["/process", "/status/keepalive"]:
         return await call_next(request)
 
-    # Admin paths require the admin token in X-Admin-Token header
+    # Admin paths require token
     if request.url.path.startswith("/admin/"):
         admin_token = request.headers.get("X-Admin-Token")
         if not ADMIN_TOKEN or admin_token != ADMIN_TOKEN:
@@ -71,11 +75,14 @@ async def require_admin_token(request: Request, call_next):
     return await call_next(request)
 
 # ------------------------------------------------------------
-# Admin endpoint: reset entire local cache and re‑seed from Supabase
+# Admin endpoints (all protected by Depends)
 # ------------------------------------------------------------
+@app.post("/admin/verify")
+async def verify_admin(_ = Depends(require_admin_token)):
+    return {"status": "ok"}
+
 @app.post("/admin/reset-cache")
-async def reset_cache(request: Request):
-    # Token already checked in middleware
+async def reset_cache(_ = Depends(require_admin_token)):
     try:
         if os.path.exists("tracks_cache.db"):
             os.remove("tracks_cache.db")
@@ -93,11 +100,8 @@ async def reset_cache(request: Request):
         logger.error(f"Reset cache failed: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# ------------------------------------------------------------
-# Admin endpoint: clear a single Spotify URI from the local cache
-# ------------------------------------------------------------
 @app.post("/admin/clear-uri")
-async def clear_uri(request: Request):
+async def clear_uri(request: Request, _ = Depends(require_admin_token)):
     try:
         body = await request.json()
     except:
@@ -108,7 +112,6 @@ async def clear_uri(request: Request):
         return JSONResponse(status_code=400, content={"error": "Missing 'spotify_uri' field"})
 
     try:
-        # Delete from tracks_cache
         conn_tracks = sqlite3.connect("tracks_cache.db")
         cursor_tracks = conn_tracks.cursor()
         cursor_tracks.execute("DELETE FROM tracks_cache WHERE spotify_uri = ?", (spotify_uri,))
@@ -116,7 +119,6 @@ async def clear_uri(request: Request):
         rows_tracks = cursor_tracks.rowcount
         conn_tracks.close()
 
-        # Delete from links_cache
         conn_links = sqlite3.connect("links_cache.db")
         cursor_links = conn_links.cursor()
         cursor_links.execute("DELETE FROM links_cache WHERE spotify_uri = ?", (spotify_uri,))
@@ -134,11 +136,8 @@ async def clear_uri(request: Request):
         logger.error(f"Failed to clear URI {spotify_uri}: {e}")
         return JSONResponse(status_code=500, content={"error": str(e)})
 
-# ------------------------------------------------------------
-# Admin endpoint: refresh a single URI from Supabase (on‑demand seeding)
-# ------------------------------------------------------------
 @app.post("/admin/refresh-uri")
-async def refresh_uri(request: Request):
+async def refresh_uri(request: Request, _ = Depends(require_admin_token)):
     try:
         body = await request.json()
     except:
@@ -149,15 +148,12 @@ async def refresh_uri(request: Request):
         return JSONResponse(status_code=400, content={"error": "Missing 'spotify_uri' field"})
 
     try:
-        # 1. Fetch track from Supabase (if exists)
         track_res = _supabase.table("tracks").select("*").eq("spotify_uri", spotify_uri).execute()
         track_data = track_res.data[0] if track_res.data else None
 
-        # 2. Fetch link from Supabase (if exists)
         link_res = _supabase.table("links").select("*").eq("spotify_uri", spotify_uri).execute()
         link_data = link_res.data[0] if link_res.data else None
 
-        # 3. Update tracks_cache
         conn_tracks = sqlite3.connect("tracks_cache.db")
         cursor_tracks = conn_tracks.cursor()
         if track_data:
@@ -170,7 +166,6 @@ async def refresh_uri(request: Request):
         conn_tracks.commit()
         conn_tracks.close()
 
-        # 4. Update links_cache
         conn_links = sqlite3.connect("links_cache.db")
         cursor_links = conn_links.cursor()
         if link_data:
@@ -199,7 +194,7 @@ async def refresh_uri(request: Request):
         return JSONResponse(status_code=500, content={"error": str(e)})
 
 # ------------------------------------------------------------
-# One‑time seeding
+# One‑time seeding (unchanged)
 # ------------------------------------------------------------
 def initialize_local_cache():
     init_dbs()
@@ -223,7 +218,7 @@ def initialize_local_cache():
 initialize_local_cache()
 
 # ------------------------------------------------------------
-# Background sync worker
+# Background sync worker (unchanged)
 # ------------------------------------------------------------
 def sync_worker():
     while True:
@@ -273,7 +268,7 @@ sync_thread = threading.Thread(target=sync_worker, daemon=True)
 sync_thread.start()
 
 # ------------------------------------------------------------
-# Frontend serving (optional)
+# Frontend serving
 # ------------------------------------------------------------
 FRONTEND_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "index.html")
 if os.path.exists(FRONTEND_PATH):
