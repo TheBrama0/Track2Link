@@ -24,7 +24,7 @@ def init_dbs():
                 synced INTEGER DEFAULT 0
             )
         """)
-    # Links cache
+    # Links cache – add match_pass column
     with _get_conn(LINKS_DB) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS links_cache (
@@ -33,9 +33,15 @@ def init_dbs():
                 duration_seconds REAL,
                 title TEXT,
                 full_row_json TEXT,
-                synced INTEGER DEFAULT 0
+                synced INTEGER DEFAULT 0,
+                match_pass INTEGER DEFAULT 0
             )
         """)
+        # For existing databases, add column if missing
+        try:
+            conn.execute("ALTER TABLE links_cache ADD COLUMN match_pass INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass  # column already exists
         conn.execute("CREATE INDEX IF NOT EXISTS idx_links_uri ON links_cache(spotify_uri)")
 
 
@@ -75,25 +81,28 @@ def seed_tracks_from_supabase(supabase_client):
 
 
 # ---------- links operations ----------
-def get_cached_link(spotify_uri: str) -> Tuple[Optional[str], Optional[float], Optional[str]]:
+def get_cached_link(spotify_uri: str) -> Tuple[Optional[str], Optional[float], Optional[str], Optional[int]]:
     with _get_conn(LINKS_DB) as conn:
         row = conn.execute(
-            "SELECT youtube_link, duration_seconds, title FROM links_cache WHERE spotify_uri = ?",
+            "SELECT youtube_link, duration_seconds, title, match_pass FROM links_cache WHERE spotify_uri = ?",
             (spotify_uri,)
         ).fetchone()
         if row:
-            return row["youtube_link"], row["duration_seconds"], row["title"]
-    return None, None, None
+            return (row["youtube_link"], 
+                    row["duration_seconds"], 
+                    row["title"], 
+                    row.get("match_pass", 0))
+    return None, None, None, None
 
 
 def add_pending_link(spotify_uri: str, youtube_link: str, duration_seconds: float, title: str,
-                     full_row_dict: Dict[str, Any]):
+                     full_row_dict: Dict[str, Any], match_pass: int = 0):
     with _get_conn(LINKS_DB) as conn:
         conn.execute(
             """INSERT OR REPLACE INTO links_cache 
-               (spotify_uri, youtube_link, duration_seconds, title, full_row_json, synced) 
-               VALUES (?, ?, ?, ?, ?, 0)""",
-            (spotify_uri, youtube_link, duration_seconds, title, json.dumps(full_row_dict))
+               (spotify_uri, youtube_link, duration_seconds, title, full_row_json, synced, match_pass) 
+               VALUES (?, ?, ?, ?, ?, 0, ?)""",
+            (spotify_uri, youtube_link, duration_seconds, title, json.dumps(full_row_dict), match_pass)
         )
 
 
@@ -109,10 +118,14 @@ def seed_links_from_supabase(supabase_client):
             for row in res.data:
                 conn.execute(
                     """INSERT OR REPLACE INTO links_cache 
-                       (spotify_uri, youtube_link, duration_seconds, title, full_row_json, synced) 
-                       VALUES (?, ?, ?, ?, ?, 1)""",
-                    (row["spotify_uri"], row.get("youtube_link"), row.get("duration_seconds"),
-                     row.get("title"), json.dumps(row))
+                       (spotify_uri, youtube_link, duration_seconds, title, full_row_json, synced, match_pass) 
+                       VALUES (?, ?, ?, ?, ?, 1, ?)""",
+                    (row["spotify_uri"], 
+                     row.get("youtube_link"), 
+                     row.get("duration_seconds"),
+                     row.get("title"), 
+                     json.dumps(row),
+                     row.get("match_pass", 0))
                 )
             offset += limit
             if len(res.data) < limit:
@@ -120,7 +133,7 @@ def seed_links_from_supabase(supabase_client):
         conn.commit()
 
 
-# ---------- NEW: sync helpers (for background worker) ----------
+# ---------- sync helpers (for background worker) ----------
 def get_unsynced_tracks(limit: int = 100) -> List[Tuple[str, str]]:
     """
     Return list of (spotify_uri, full_row_json) for tracks with synced=0.
@@ -136,11 +149,11 @@ def get_unsynced_tracks(limit: int = 100) -> List[Tuple[str, str]]:
 def get_unsynced_links(limit: int = 100) -> List[sqlite3.Row]:
     """
     Return list of rows (as sqlite3.Row) for links with synced=0.
-    Each row contains: spotify_uri, youtube_link, duration_seconds, title, full_row_json.
+    Each row contains: spotify_uri, youtube_link, duration_seconds, title, full_row_json, match_pass.
     """
     with _get_conn(LINKS_DB) as conn:
         rows = conn.execute(
-            "SELECT spotify_uri, youtube_link, duration_seconds, title, full_row_json "
+            "SELECT spotify_uri, youtube_link, duration_seconds, title, full_row_json, match_pass "
             "FROM links_cache WHERE synced = 0 LIMIT ?",
             (limit,)
         ).fetchall()
